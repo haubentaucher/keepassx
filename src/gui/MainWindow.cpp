@@ -30,17 +30,56 @@
 #include "gui/AboutDialog.h"
 #include "gui/DatabaseWidget.h"
 
+#include "http/Service.h"
+#include "http/HttpSettings.h"
+#include "http/OptionDialog.h"
+#include "gui/SettingsWidget.h"
+
+class HttpPlugin: public ISettingsPage {
+    public:
+        HttpPlugin(DatabaseTabWidget * tabWidget) {
+            m_service = new Service(tabWidget);
+        }
+        virtual ~HttpPlugin() {
+            //delete m_service;
+        }
+        virtual QString name() {
+            return QObject::tr("Http");
+        }
+        virtual QWidget * createWidget() {
+            OptionDialog * dlg = new OptionDialog();
+            QObject::connect(dlg, SIGNAL(removeSharedEncryptionKeys()), m_service, SLOT(removeSharedEncryptionKeys()));
+            QObject::connect(dlg, SIGNAL(removeStoredPermissions()), m_service, SLOT(removeStoredPermissions()));
+            return dlg;
+        }
+        virtual void loadSettings(QWidget * widget) {
+            qobject_cast<OptionDialog*>(widget)->loadSettings();
+        }
+        virtual void saveSettings(QWidget * widget) {
+            qobject_cast<OptionDialog*>(widget)->saveSettings();
+            if (HttpSettings::isEnabled())
+                m_service->start();
+            else
+                m_service->stop();
+        }
+    private:
+        Service *m_service;
+    };
+
 const QString MainWindow::BaseWindowTitle = "KeePassX";
 
 MainWindow::MainWindow()
     : m_ui(new Ui::MainWindow())
     , m_trayIcon(Q_NULLPTR)
 {
+    appExitCalled = false;
+
     m_ui->setupUi(this);
 
     m_countDefaultAttributes = m_ui->menuEntryCopyAttribute->actions().size();
 
     restoreGeometry(config()->get("GUI/MainWindowGeometry").toByteArray());
+    m_ui->settingsWidget->addSettingsPage(new HttpPlugin(m_ui->tabWidget));
 
     setWindowIcon(filePath()->applicationIcon());
     QAction* toggleViewAction = m_ui->toolBar->toggleViewAction();
@@ -167,7 +206,7 @@ MainWindow::MainWindow()
             SLOT(exportToCsv()));
     connect(m_ui->actionLockDatabases, SIGNAL(triggered()), m_ui->tabWidget,
             SLOT(lockDatabases()));
-    connect(m_ui->actionQuit, SIGNAL(triggered()), SLOT(close()));
+    connect(m_ui->actionQuit, SIGNAL(triggered()), SLOT(appExit()));
 
     m_actionMultiplexer.connect(m_ui->actionEntryNew, SIGNAL(triggered()),
             SLOT(createEntry()));
@@ -212,6 +251,12 @@ MainWindow::MainWindow()
 
 MainWindow::~MainWindow()
 {
+}
+
+void MainWindow::appExit()
+{
+    appExitCalled = true;
+    close();
 }
 
 void MainWindow::updateLastDatabasesMenu()
@@ -430,6 +475,13 @@ void MainWindow::databaseTabChanged(int tabIndex)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (config()->get("GUI/MinimizeOnClose").toBool() && !appExitCalled)
+    {
+        event->ignore();
+        hide();
+        return;
+    }
+
     bool accept = saveLastDatabases();
 
     if (accept) {
